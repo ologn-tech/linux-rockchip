@@ -10,6 +10,7 @@
  */
 #include <linux/clk.h>
 #include <linux/delay.h>
+#include <linux/gpio/consumer.h>
 #include <linux/i2c.h>
 #include <linux/init.h>
 #include <linux/io.h>
@@ -245,6 +246,7 @@ struct imx219 {
 	const char *module_facing;
 	const char *module_name;
 	const char *len_name;
+	struct gpio_desc *enable_gpio;
 };
 
 static const struct imx219_mode supported_modes[] = {
@@ -1061,6 +1063,10 @@ static int imx219_probe(struct i2c_client *client,
 			 PTR_ERR(priv->clk));
 		return -EPROBE_DEFER;
 	}
+
+	priv->enable_gpio = devm_gpiod_get(dev, "enable", GPIOD_OUT_HIGH);
+	if (IS_ERR(priv->enable_gpio))
+		dev_warn(dev, "Failed to get enable_gpios\n");
 
 	/* 1920 * 1080 by default */
 	priv->cur_mode = &supported_modes[1];
