@@ -20,7 +20,7 @@
 #include <linux/videodev2.h>
 #include <linux/version.h>
 #include <linux/rk-camera-module.h>
-#include <linux/compat.h>
+#include <linux/pinctrl/consumer.h>
 #include <media/v4l2-ctrls.h>
 #include <media/v4l2-device.h>
 #include <media/v4l2-fwnode.h>
@@ -45,10 +45,13 @@
 #define IMX219_DIGITAL_EXPOSURE_MAX	4095
 #define IMX219_DIGITAL_EXPOSURE_DEFAULT	1575
 
+#define IMX219_XVCLK_FREQ		24000000
+
 #define IMX219_EXP_LINES_MARGIN	4
 
 #define IMX219_NAME			"imx219"
-#define IMX219_LANES  			2
+
+#define OF_CAMERA_PINCTRL_STATE_DEFAULT	"rockchip,camera_default"
 
 static const s64 link_freq_menu_items[] = {
 	456000000,
@@ -247,6 +250,9 @@ struct imx219 {
 	const char *module_name;
 	const char *len_name;
 	struct gpio_desc *enable_gpio;
+	struct pinctrl		*pinctrl;
+	struct pinctrl_state	*pins_default;
+	struct v4l2_fwnode_endpoint bus_cfg;
 };
 
 static const struct imx219_mode supported_modes[] = {
@@ -269,7 +275,7 @@ static const struct imx219_mode supported_modes[] = {
 			.denominator = 210000,
 		},
 		.hts_def = 0x0d78 - IMX219_EXP_LINES_MARGIN,
-		.vts_def = 0x09c4,
+		.vts_def = 0x09d7,
 		.reg_list = imx219_init_tab_3280_2464_21fps,
 	},
 };
@@ -639,7 +645,7 @@ static int imx219_enum_mbus_code(struct v4l2_subdev *sd,
 {
 	if (code->index != 0)
 		return -EINVAL;
-	code->code = MEDIA_BUS_FMT_SRGGB10_1X10;
+	code->code = MEDIA_BUS_FMT_SBGGR10_1X10;
 
 	return 0;
 }
@@ -806,18 +812,6 @@ static long imx219_compat_ioctl32(struct v4l2_subdev *sd,
 }
 #endif
 
-static int imx219_g_mbus_config(struct v4l2_subdev *sd, unsigned int pad_id,
-				struct v4l2_mbus_config *config)
-{
-	//struct i2c_client *client = v4l2_get_subdevdata(sd);
-	//struct imx219 *imx219 = to_imx219(client);
-
-	config->type = V4L2_MBUS_CSI2_DPHY;
-	config->bus.mipi_csi2.num_data_lanes = IMX219_LANES;
-
-	return 0;
-}
-
 static int imx219_enum_frame_interval(struct v4l2_subdev *sd,
 				       struct v4l2_subdev_state *sd_state,
 				       struct v4l2_subdev_frame_interval_enum *fie)
@@ -834,6 +828,19 @@ static int imx219_enum_frame_interval(struct v4l2_subdev *sd,
 	fie->width = supported_modes[fie->index].width;
 	fie->height = supported_modes[fie->index].height;
 	fie->interval = supported_modes[fie->index].max_fps;
+	return 0;
+}
+
+static int imx219_g_mbus_config(struct v4l2_subdev *sd, unsigned int pad,
+				struct v4l2_mbus_config *config)
+{
+	struct i2c_client *client = v4l2_get_subdevdata(sd);
+	struct imx219 *priv = to_imx219(client);
+	u32 lane_num = priv->bus_cfg.bus.mipi_csi2.num_data_lanes;
+
+	config->type = V4L2_MBUS_CSI2_DPHY;
+	config->bus.mipi_csi2.num_data_lanes = lane_num;
+
 	return 0;
 }
 
@@ -1022,10 +1029,11 @@ error:
 static int imx219_probe(struct i2c_client *client,
 			const struct i2c_device_id *did)
 {
+	struct imx219 *priv;
 	struct i2c_adapter *adapter = to_i2c_adapter(client->dev.parent);
 	struct device *dev = &client->dev;
 	struct device_node *node = dev->of_node;
-	struct imx219 *priv;
+	struct device_node *endpoint;
 	struct v4l2_subdev *sd;
 	char facing[2];
 	int ret;
@@ -1043,6 +1051,15 @@ static int imx219_probe(struct i2c_client *client,
 	priv = devm_kzalloc(&client->dev, sizeof(struct imx219), GFP_KERNEL);
 	if (!priv)
 		return -ENOMEM;
+
+	priv->pinctrl = devm_pinctrl_get(dev);
+	if (!IS_ERR(priv->pinctrl)) {
+		priv->pins_default =
+			pinctrl_lookup_state(priv->pinctrl,
+					     OF_CAMERA_PINCTRL_STATE_DEFAULT);
+		if (IS_ERR(priv->pins_default))
+			dev_err(dev, "could not get default pinstate\n");
+	}
 
 	ret = of_property_read_u32(node, RKMODULE_CAMERA_MODULE_INDEX,
 				   &priv->module_index);
@@ -1064,16 +1081,40 @@ static int imx219_probe(struct i2c_client *client,
 		return -EPROBE_DEFER;
 	}
 
-	priv->enable_gpio = devm_gpiod_get(dev, "enable", GPIOD_OUT_HIGH);
+	if (!IS_ERR_OR_NULL(priv->pins_default)) {
+		ret = pinctrl_select_state(priv->pinctrl,
+					   priv->pins_default);
+		if (ret < 0)
+			dev_err(dev, "could not set pins\n");
+	}
+	ret = clk_set_rate(priv->clk, IMX219_XVCLK_FREQ);
+	if (ret < 0)
+		dev_warn(dev, "Failed to set xvclk rate (24MHz)\n");
+	if (clk_get_rate(priv->clk) != IMX219_XVCLK_FREQ)
+		dev_warn(dev, "xvclk mismatched, modes are based on 24MHz\n");
+
+	priv->enable_gpio = devm_gpiod_get_optional(dev, "enable", GPIOD_OUT_HIGH);
 	if (IS_ERR(priv->enable_gpio))
 		dev_warn(dev, "Failed to get enable_gpios\n");
 
+	endpoint = of_graph_get_next_endpoint(dev->of_node, NULL);
+	if (!endpoint) {
+		dev_err(dev, "Failed to get endpoint\n");
+		return -EINVAL;
+	}
+	ret = v4l2_fwnode_endpoint_parse(of_fwnode_handle(endpoint),
+		&priv->bus_cfg);
+	if (ret) {
+		dev_err(dev, "Failed to get bus cfg\n");
+		return ret;
+	}
+
 	/* 1920 * 1080 by default */
-	priv->cur_mode = &supported_modes[1];
+	priv->cur_mode = &supported_modes[0];
 	priv->cfg_num = ARRAY_SIZE(supported_modes);
 
-	// priv->crop_rect.left = 680;
-	// priv->crop_rect.top = 692;
+	priv->crop_rect.left = 680;
+	priv->crop_rect.top = 692;
 	priv->crop_rect.width = priv->cur_mode->width;
 	priv->crop_rect.height = priv->cur_mode->height;
 
@@ -1085,9 +1126,7 @@ static int imx219_probe(struct i2c_client *client,
 	if (ret < 0)
 		return ret;
 
-	priv->subdev.flags |= V4L2_SUBDEV_FL_HAS_DEVNODE |
-		     V4L2_SUBDEV_FL_HAS_EVENTS;
-
+	priv->subdev.flags |= V4L2_SUBDEV_FL_HAS_DEVNODE;
 	priv->pad.flags = MEDIA_PAD_FL_SOURCE;
 	priv->subdev.entity.function = MEDIA_ENT_F_CAM_SENSOR;
 	ret = media_entity_pads_init(&priv->subdev.entity, 1, &priv->pad);
@@ -1107,7 +1146,7 @@ static int imx219_probe(struct i2c_client *client,
 	ret = v4l2_async_register_subdev_sensor(sd);
 	if (ret < 0)
 		return ret;
-	printk("==> imx219 ken: %d %s \n",__LINE__,__func__);
+
 	return ret;
 }
 
@@ -1118,7 +1157,6 @@ static void imx219_remove(struct i2c_client *client)
 	v4l2_async_unregister_subdev(&priv->subdev);
 	media_entity_cleanup(&priv->subdev.entity);
 	v4l2_ctrl_handler_free(&priv->ctrl_handler);
-
 }
 
 static const struct i2c_device_id imx219_id[] = {
