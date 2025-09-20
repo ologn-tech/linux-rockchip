@@ -1125,6 +1125,7 @@
 		reg = <0x30>;
 		clocks = <&ext_cam_ds90ub960_clk>;
 		clock-names = "refclk";
+		powerdown-gpios = <&gpio2 RK_PC6 GPIO_ACTIVE_LOW>;
 		i2c-alias-pool = <0x48 0x49 0x4a 0x4b>;
 
 		ports {
