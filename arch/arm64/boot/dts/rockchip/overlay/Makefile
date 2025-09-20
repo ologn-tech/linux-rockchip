@@ -279,7 +279,8 @@ dtbo-$(CONFIG_ARCH_ROCKCHIP) += \
 	rk3568-uart9-m1.dtbo \
 	rk3568-w1-gpio3-a5.dtbo \
 	rk3568-w1-gpio3-d1.dtbo \
-	rk356x-imx219.dtbo
+	rk356x-imx219.dtbo \
+	rk356x-ds90ub960-ds90ub953-imx219.dtbo
 
 dtbotxt-$(CONFIG_ARCH_ROCKCHIP) += \
 	README.rockchip-overlays
