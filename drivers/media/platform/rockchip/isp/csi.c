@@ -117,36 +117,186 @@ static int rkisp_csi_g_mbus_config(struct v4l2_subdev *sd,
 	return v4l2_subdev_call(remote_sd, pad, get_mbus_config, pad_id, config);
 }
 
-static int rkisp_csi_get_set_fmt(struct v4l2_subdev *sd,
-				  struct v4l2_subdev_state *sd_state,
-				  struct v4l2_subdev_format *fmt)
+static int rkisp_csi_get_fmt(struct v4l2_subdev *sd,
+			     struct v4l2_subdev_state *sd_state,
+			     struct v4l2_subdev_format *fmt)
 {
-	struct v4l2_subdev *remote_sd;
-
-	if (fmt->pad != CSI_SINK)
-		fmt->pad -= 1;
-
-	if (!sd)
-		return -ENODEV;
-	remote_sd = get_remote_subdev(sd);
-	return v4l2_subdev_call(remote_sd, pad, get_fmt, NULL, fmt);
+	return v4l2_subdev_get_fmt(sd, sd_state, fmt);
 }
 
-static int rkisp_csi_s_stream(struct v4l2_subdev *sd, int on)
+static int rkisp_csi_set_fmt(struct v4l2_subdev *subdev,
+			     struct v4l2_subdev_state *state,
+			     struct v4l2_subdev_format *format)
+{
+	struct v4l2_mbus_framefmt *fmt;
+
+	/* No transcoding, source and sink formats must match. */
+	if (format->pad >= CSI_SRC_CH0)
+		return v4l2_subdev_get_fmt(subdev, state, format);
+
+	/* Set sink format */
+	fmt = v4l2_subdev_state_get_stream_format(state, format->pad,
+						  format->stream);
+	if (!fmt)
+		return -EINVAL;
+
+	*fmt = format->format;
+
+	/* Propagate to source format */
+	fmt = v4l2_subdev_state_get_opposite_stream_format(state, format->pad,
+							   format->stream);
+	if (!fmt)
+		return -EINVAL;
+
+	*fmt = format->format;
+
+	return 0;
+}
+
+static int _rkisp_csi_set_routing(struct v4l2_subdev *subdev,
+				  struct v4l2_subdev_state *state,
+				  struct v4l2_subdev_krouting *routing)
+{
+	static const struct v4l2_mbus_framefmt format = {
+		.width = 1920,
+		.height = 1080,
+		.code = MEDIA_BUS_FMT_SRGGB10_1X10,
+		.field = V4L2_FIELD_NONE,
+		.colorspace = V4L2_COLORSPACE_SRGB,
+		.ycbcr_enc = V4L2_YCBCR_ENC_601,
+		.quantization = V4L2_QUANTIZATION_LIM_RANGE,
+		.xfer_func = V4L2_XFER_FUNC_SRGB,
+	};
+	int ret;
+
+	if (routing->num_routes > V4L2_FRAME_DESC_ENTRY_MAX)
+		return -EINVAL;
+
+	ret = v4l2_subdev_routing_validate(subdev, routing,
+					   V4L2_SUBDEV_ROUTING_ONLY_1_TO_1);
+	if (ret)
+		return ret;
+
+	ret = v4l2_subdev_set_routing_with_fmt(subdev, state, routing, &format);
+	if (ret)
+		return ret;
+
+	return 0;
+}
+
+static int rkisp_csi_set_routing(struct v4l2_subdev *subdev,
+				 struct v4l2_subdev_state *state,
+				 enum v4l2_subdev_format_whence which,
+				 struct v4l2_subdev_krouting *routing)
+{
+	return _rkisp_csi_set_routing(subdev, state, routing);
+}
+
+static int rkisp_csi_init_cfg(struct v4l2_subdev *subdev,
+			      struct v4l2_subdev_state *state)
+{
+	struct v4l2_subdev_route routes[] = {
+		{
+			.sink_pad = CSI_SINK,
+			.sink_stream = 0,
+			.source_pad = CSI_SRC_CH0,
+			.source_stream = 0,
+			.flags = V4L2_SUBDEV_ROUTE_FL_ACTIVE,
+		},
+	};
+
+	struct v4l2_subdev_krouting routing = {
+		.num_routes = ARRAY_SIZE(routes),
+		.routes = routes,
+	};
+
+	return _rkisp_csi_set_routing(subdev, state, &routing);
+}
+
+static int rkisp_csi_enable_streams(struct v4l2_subdev *sd,
+				    struct v4l2_subdev_state *state,
+				    u32 source_pad,
+				    u64 source_streams_mask)
 {
 	struct rkisp_csi_device *csi = v4l2_get_subdevdata(sd);
 	struct rkisp_device *dev = csi->ispdev;
+	struct media_pad *remote_pad;
+	struct v4l2_subdev *remote_sd;
+	u64 sink_streams;
+	int ret = 0;
+
+	remote_pad = media_pad_remote_pad_first(&csi->pads[CSI_SINK]);
+	if (!remote_pad)
+		return -ENODEV;
+
+	remote_sd = media_entity_to_v4l2_subdev(remote_pad->entity);
+	if (!remote_sd)
+		return -ENODEV;
+
+	sink_streams = v4l2_subdev_state_xlate_streams(state,
+						       source_pad,
+						       CSI_SINK,
+						       &source_streams_mask);
 
 	csi->err_cnt = 0;
 	csi->irq_cnt = 0;
 	memset(csi->tx_first, 0, sizeof(csi->tx_first));
 
-	if (!IS_HDR_RDBK(dev->hdr.op_mode))
-		return 0;
-	if (on)
+	if (IS_HDR_RDBK(dev->hdr.op_mode))
 		rkisp_write(dev, CSI2RX_Y_STAT_CTRL, SW_Y_STAT_EN, true);
-	else
+
+	/* Start streaming on the source */
+	ret = v4l2_subdev_enable_streams(remote_sd, remote_pad->index, sink_streams);
+	if (ret) {
+		dev_err(dev->dev,
+			"Failed to start streams %#llx on subdev\n",
+			sink_streams);
+		return ret;
+	}
+
+	return 0;
+}
+
+static int rkisp_csi_disable_streams(struct v4l2_subdev *sd,
+				     struct v4l2_subdev_state *state,
+				     u32 source_pad,
+				     u64 source_streams_mask)
+{
+	struct rkisp_csi_device *csi = v4l2_get_subdevdata(sd);
+	struct rkisp_device *dev = csi->ispdev;
+	struct media_pad *remote_pad;
+	struct v4l2_subdev *remote_sd;
+	u64 sink_streams;
+	int ret = 0;
+
+	sink_streams = v4l2_subdev_state_xlate_streams(state,
+						       source_pad,
+						       CSI_SINK,
+						       &source_streams_mask);
+
+	remote_pad = media_pad_remote_pad_first(&csi->pads[CSI_SINK]);
+	if (!remote_pad)
+		return -ENODEV;
+
+	remote_sd = media_entity_to_v4l2_subdev(remote_pad->entity);
+	if (!remote_sd)
+		return -ENODEV;
+
+	csi->err_cnt = 0;
+	csi->irq_cnt = 0;
+	memset(csi->tx_first, 0, sizeof(csi->tx_first));
+
+	if (IS_HDR_RDBK(dev->hdr.op_mode))
 		rkisp_write(dev, CSI2RX_Y_STAT_CTRL, 0, true);
+
+	ret = v4l2_subdev_disable_streams(remote_sd, remote_pad->index, sink_streams);
+	if (ret) {
+		dev_err(dev->dev,
+			"Failed to disable streams %#llx on subdev\n",
+			sink_streams);
+		return ret;
+	}
+
 	return 0;
 }
 
@@ -161,13 +311,13 @@ static const struct media_entity_operations rkisp_csi_media_ops = {
 };
 
 static const struct v4l2_subdev_pad_ops rkisp_csi_pad_ops = {
-	.set_fmt = rkisp_csi_get_set_fmt,
-	.get_fmt = rkisp_csi_get_set_fmt,
+	.set_fmt = rkisp_csi_set_fmt,
+	.get_fmt = rkisp_csi_get_fmt,
 	.get_mbus_config = rkisp_csi_g_mbus_config,
-};
-
-static const struct v4l2_subdev_video_ops rkisp_csi_video_ops = {
-	.s_stream = rkisp_csi_s_stream,
+	.init_cfg = rkisp_csi_init_cfg,
+	.set_routing = rkisp_csi_set_routing,
+	.enable_streams = rkisp_csi_enable_streams,
+	.disable_streams = rkisp_csi_disable_streams,
 };
 
 static const struct v4l2_subdev_core_ops rkisp_csi_core_ops = {
@@ -176,7 +326,6 @@ static const struct v4l2_subdev_core_ops rkisp_csi_core_ops = {
 
 static struct v4l2_subdev_ops rkisp_csi_ops = {
 	.core = &rkisp_csi_core_ops,
-	.video = &rkisp_csi_video_ops,
 	.pad = &rkisp_csi_pad_ops,
 };
 
@@ -732,7 +881,7 @@ int rkisp_register_csi_subdev(struct rkisp_device *dev,
 	sd = &csi_dev->sd;
 
 	v4l2_subdev_init(sd, &rkisp_csi_ops);
-	sd->flags |= V4L2_SUBDEV_FL_HAS_DEVNODE;
+	sd->flags |= V4L2_SUBDEV_FL_HAS_DEVNODE | V4L2_SUBDEV_FL_STREAMS;
 	sd->entity.ops = &rkisp_csi_media_ops;
 	sd->entity.function = MEDIA_ENT_F_V4L2_SUBDEV_UNKNOWN;
 	snprintf(sd->name, sizeof(sd->name), CSI_DEV_NAME);
@@ -761,13 +910,19 @@ int rkisp_register_csi_subdev(struct rkisp_device *dev,
 	sd->owner = THIS_MODULE;
 	v4l2_set_subdevdata(sd, csi_dev);
 	sd->grp_id = GRP_ID_CSI;
+	ret = v4l2_subdev_init_finalize(sd);
+	if (ret < 0)
+		goto free_media;
+
 	ret = v4l2_device_register_subdev(v4l2_dev, sd);
 	if (ret < 0) {
 		v4l2_err(v4l2_dev, "Failed to register csi subdev\n");
-		goto free_media;
+		goto err_free_subdev;
 	}
 
 	return 0;
+err_free_subdev:
+	v4l2_subdev_cleanup(sd);
 free_media:
 	media_entity_cleanup(&sd->entity);
 	return ret;
@@ -778,5 +933,6 @@ void rkisp_unregister_csi_subdev(struct rkisp_device *dev)
 	struct v4l2_subdev *sd = &dev->csi_dev.sd;
 
 	v4l2_device_unregister_subdev(sd);
+	v4l2_subdev_cleanup(sd);
 	media_entity_cleanup(&sd->entity);
 }

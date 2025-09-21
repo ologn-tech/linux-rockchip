@@ -3135,7 +3135,17 @@ static int rkisp_isp_sd_s_stream(struct v4l2_subdev *sd, int on)
 {
 	struct rkisp_device *isp_dev = sd_to_isp_dev(sd);
 	struct rkisp_hw_dev *hw_dev = isp_dev->hw_dev;
+	struct v4l2_subdev *remote_sd;
+	struct media_pad *remote_pad;
 	int ret;
+
+	remote_pad = media_pad_remote_pad_first(&sd->entity.pads[RKISP_ISP_PAD_SINK]);
+	if (!remote_pad)
+		return -ENODEV;
+
+	remote_sd = media_entity_to_v4l2_subdev(remote_pad->entity);
+	if (!remote_sd)
+		return -ENODEV;
 
 	if (!on) {
 		if (IS_HDR_RDBK(isp_dev->rd_mode)) {
@@ -3160,7 +3170,7 @@ static int rkisp_isp_sd_s_stream(struct v4l2_subdev *sd, int on)
 		rkisp_params_stream_stop(&isp_dev->params_vdev);
 		atomic_set(&isp_dev->isp_sdev.frm_sync_seq, 0);
 		rkisp_stop_3a_run(isp_dev);
-		return 0;
+		return v4l2_subdev_disable_streams(remote_sd, remote_pad->index, BIT_ULL(0));
 	}
 
 	hw_dev->is_runing = true;
@@ -3187,7 +3197,8 @@ static int rkisp_isp_sd_s_stream(struct v4l2_subdev *sd, int on)
 	rkisp_global_update_mi(isp_dev);
 	isp_dev->isp_state = ISP_START | ISP_FRAME_END;
 	rkisp_rdbk_trigger_event(isp_dev, T_CMD_QUEUE, NULL);
-	return 0;
+
+	return v4l2_subdev_enable_streams(remote_sd, remote_pad->index, BIT_ULL(0));
 }
 
 static void rkisp_rx_buf_free(struct rkisp_device *dev, struct rkisp_rx_buf *dbufs)

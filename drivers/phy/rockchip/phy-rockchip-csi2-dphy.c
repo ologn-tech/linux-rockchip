@@ -624,7 +624,17 @@ static void csi2_dphy_disable_clk(struct csi2_dphy *dphy)
 static int csi2_dphy_s_stream(struct v4l2_subdev *sd, int on)
 {
 	struct csi2_dphy *dphy = to_csi2_dphy(sd);
+	struct v4l2_subdev *remote_sd;
+	struct media_pad *remote_pad;
 	int ret = 0;
+
+	remote_pad = media_pad_remote_pad_first(&sd->entity.pads[CSI2_DPHY_RX_PAD_SINK]);
+	if (!remote_pad)
+		return -ENODEV;
+
+	remote_sd = media_entity_to_v4l2_subdev(remote_pad->entity);
+	if (!remote_sd)
+		return -ENODEV;
 
 	mutex_lock(&dphy->mutex);
 	if (on) {
@@ -652,13 +662,23 @@ static int csi2_dphy_s_stream(struct v4l2_subdev *sd, int on)
 			return ret;
 		}
 		ret = csi2_dphy_s_stream_start(sd);
+		if (ret) {
+			mutex_unlock(&dphy->mutex);
+			return ret;
+		}
+		ret = v4l2_subdev_enable_streams(remote_sd, remote_pad->index, BIT_ULL(0));
 	} else {
 		if (!dphy->is_streaming) {
 			mutex_unlock(&dphy->mutex);
 			return 0;
 		}
 		ret = csi2_dphy_s_stream_stop(sd);
+		if (ret) {
+			mutex_unlock(&dphy->mutex);
+			return ret;
+		}
 		csi2_dphy_disable_clk(dphy);
+		ret = v4l2_subdev_disable_streams(remote_sd, remote_pad->index, BIT_ULL(0));
 	}
 	mutex_unlock(&dphy->mutex);
 
