@@ -39,6 +39,7 @@
 #include <linux/kthread.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
+#include <linux/of_graph.h>
 #include <linux/property.h>
 #include <linux/regmap.h>
 #include <linux/regulator/consumer.h>
@@ -536,6 +537,8 @@ struct ub960_data {
 		s8 min;
 		s8 max;
 	} strobe;
+
+	struct v4l2_fwnode_endpoint bus_cfg;
 };
 
 static inline struct ub960_data *sd_to_ub960(struct v4l2_subdev *sd)
@@ -2927,6 +2930,18 @@ static int ub960_init_cfg(struct v4l2_subdev *sd,
 	return _ub960_set_routing(sd, state, &routing);
 }
 
+static int ub960_g_mbus_config(struct v4l2_subdev *sd, unsigned int pad,
+			       struct v4l2_mbus_config *config)
+{
+	struct ub960_data *priv = sd_to_ub960(sd);
+	u32 lane_num = priv->bus_cfg.bus.mipi_csi2.num_data_lanes;
+
+	config->type = V4L2_MBUS_CSI2_DPHY;
+	config->bus.mipi_csi2.num_data_lanes = lane_num;
+
+	return 0;
+}
+
 static const struct v4l2_subdev_pad_ops ub960_pad_ops = {
 	.enable_streams = ub960_enable_streams,
 	.disable_streams = ub960_disable_streams,
@@ -2938,6 +2953,7 @@ static const struct v4l2_subdev_pad_ops ub960_pad_ops = {
 	.set_fmt = ub960_set_fmt,
 
 	.init_cfg = ub960_init_cfg,
+	.get_mbus_config = ub960_g_mbus_config,
 };
 
 static int ub960_log_status(struct v4l2_subdev *sd)
@@ -3876,6 +3892,7 @@ static int ub960_probe(struct i2c_client *client)
 {
 	struct device *dev = &client->dev;
 	struct ub960_data *priv;
+	struct device_node *endpoint;
 	unsigned int port_lock_mask;
 	unsigned int port_mask;
 	unsigned int nport;
@@ -3886,6 +3903,18 @@ static int ub960_probe(struct i2c_client *client)
 		return -ENOMEM;
 
 	priv->client = client;
+
+	endpoint = of_graph_get_next_endpoint(dev->of_node, NULL);
+	if (!endpoint) {
+		dev_err(dev, "Failed to get endpoint\n");
+		return -EINVAL;
+	}
+	ret = v4l2_fwnode_endpoint_parse(of_fwnode_handle(endpoint),
+					 &priv->bus_cfg);
+	if (ret) {
+		dev_err(dev, "Failed to get bus cfg\n");
+		return ret;
+	}
 
 	priv->hw_data = device_get_match_data(dev);
 
