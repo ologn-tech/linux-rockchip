@@ -590,6 +590,8 @@ static const struct ub960_format_info ub960_formats[] = {
 	{ .code	= MEDIA_BUS_FMT_SIGGR10_1X10, .bpp = 10, .datatype = MIPI_CSI2_DT_RAW10, },
 	{ .code	= MEDIA_BUS_FMT_SGIBG10_1X10, .bpp = 10, .datatype = MIPI_CSI2_DT_RAW10, },
 	{ .code	= MEDIA_BUS_FMT_SIGGB10_1X10, .bpp = 10, .datatype = MIPI_CSI2_DT_RAW10, },
+	{ .code	= MEDIA_BUS_FMT_SRGGB10_1X10, .bpp = 10, .datatype = MIPI_CSI2_DT_RAW10, },
+	{ .code	= MEDIA_BUS_FMT_SBGGR10_1X10, .bpp = 10, .datatype = MIPI_CSI2_DT_RAW10, },
 };
 
 static const struct ub960_format_info *ub960_find_format(u32 code)
@@ -2715,9 +2717,9 @@ static int _ub960_set_routing(struct v4l2_subdev *sd,
 			      struct v4l2_subdev_krouting *routing)
 {
 	static const struct v4l2_mbus_framefmt format = {
-		.width = 640,
-		.height = 480,
-		.code = MEDIA_BUS_FMT_UYVY8_1X16,
+		.width = 1920,
+		.height = 1080,
+		.code = MEDIA_BUS_FMT_SRGGB10_1X10,
 		.field = V4L2_FIELD_NONE,
 		.colorspace = V4L2_COLORSPACE_SRGB,
 		.ycbcr_enc = V4L2_YCBCR_ENC_601,

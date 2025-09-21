@@ -425,9 +425,9 @@ static int _ub953_set_routing(struct v4l2_subdev *sd,
 			      struct v4l2_subdev_krouting *routing)
 {
 	static const struct v4l2_mbus_framefmt format = {
-		.width = 640,
-		.height = 480,
-		.code = MEDIA_BUS_FMT_UYVY8_1X16,
+		.width = 1920,
+		.height = 1080,
+		.code = MEDIA_BUS_FMT_SRGGB10_1X10,
 		.field = V4L2_FIELD_NONE,
 		.colorspace = V4L2_COLORSPACE_SRGB,
 		.ycbcr_enc = V4L2_YCBCR_ENC_601,
