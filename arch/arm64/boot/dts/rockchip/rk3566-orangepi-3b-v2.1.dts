@@ -1115,6 +1115,7 @@
 			imx219_out: endpoint {
 				remote-endpoint = <&dphy1_in_ucam1>;
 				data-lanes = <1 2>;
+				link-frequencies = /bits/ 64 <456000000>;
 			};
 		};
 	};
@@ -1170,6 +1171,7 @@
 				ds90ub960_0_csi_out: endpoint {
 					remote-endpoint = <&dphy1_in_ucam2>;
 					data-lanes = <1 2>;
+              				link-frequencies = /bits/ 64 <800000000>;
 				};
 			};
 		};
