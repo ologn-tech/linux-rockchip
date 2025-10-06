@@ -2936,10 +2936,10 @@ static int ub960_g_mbus_config(struct v4l2_subdev *sd, unsigned int pad,
 			       struct v4l2_mbus_config *config)
 {
 	struct ub960_data *priv = sd_to_ub960(sd);
-	u32 lane_num = priv->bus_cfg.bus.mipi_csi2.num_data_lanes;
+	struct ub960_txport *tx = priv->txports[ub960_pad_to_port(priv, pad)];
 
 	config->type = V4L2_MBUS_CSI2_DPHY;
-	config->bus.mipi_csi2.num_data_lanes = lane_num;
+	config->bus.mipi_csi2.num_data_lanes = tx->num_data_lanes;
 
 	return 0;
 }
