@@ -368,34 +368,68 @@ int rkisp_update_sensor_info(struct rkisp_device *dev)
 	int i, ret = 0;
 
 	sensor_sd = get_remote_sensor(sd);
-	if (!sensor_sd)
+	if (!sensor_sd) 
 		return -ENODEV;
 
+
 	sensor = sd_to_sensor(dev, sensor_sd);
-	if (!sensor)
+	if (!sensor) 
 		return -ENODEV;
+	
 	if (dev->isp_inp & INP_CIF) {
 		sensor->mbus.type = 0;
 	} else {
 		ret = v4l2_subdev_call(sensor->sd, pad, get_mbus_config,  0, &sensor->mbus);
-		if (ret && ret != -ENOIOCTLCMD)
+		if (ret && ret != -ENOIOCTLCMD) 
 			return ret;
 	}
 	sensor->fmt[0].pad = 0;
 	sensor->fmt[0].which = V4L2_SUBDEV_FORMAT_ACTIVE;
 	ret = v4l2_subdev_call(sensor->sd, pad, get_fmt,
 			       &sensor->state, &sensor->fmt[0]);
-	if (ret && ret != -ENOIOCTLCMD)
+	if (ret && ret != -ENOIOCTLCMD) 
 		return ret;
-
 	if (sensor->mbus.type == V4L2_MBUS_CSI2_DPHY &&
 	    dev->isp_ver < ISP_V30) {
 		u8 vc = 0;
 
 		sensor_sd = get_remote_sensor(sensor->sd);
-		if (!sensor_sd)
+		if (!sensor_sd) 
 			return -ENODEV;
+
 		memset(dev->csi_dev.mipi_di, 0, sizeof(dev->csi_dev.mipi_di));
+		
+		if (sensor_sd->flags & V4L2_SUBDEV_FL_STREAMS) {
+			struct v4l2_mbus_frame_desc fd;
+			unsigned int source_pad = 0;
+			unsigned int p;
+			
+			/* Find source pad */
+			for (p = 0; p < sensor_sd->entity.num_pads; p++) {
+				if (sensor_sd->entity.pads[p].flags & MEDIA_PAD_FL_SOURCE) {
+					source_pad = p;
+					break;
+				}
+			}
+			
+			ret = v4l2_subdev_call(sensor_sd, pad, get_frame_desc, source_pad, &fd);
+			if (!ret && fd.num_entries > 0) {
+
+				for (i = 0; i < fd.num_entries && i < (dev->csi_dev.max_pad - 1); i++) {
+					u8 vc = fd.entry[i].bus.csi2.vc;
+					u8 dt = fd.entry[i].bus.csi2.dt;
+					
+					dev->csi_dev.mipi_di[i] = CIF_MIPI_DATA_SEL_DT(dt) |
+						CIF_MIPI_DATA_SEL_VC(vc);
+
+				}
+				goto skip_channel_info;
+			} else {
+				pr_err("rkisp_update_sensor_info: get_frame_desc failed ret=%d\n", ret);
+			}
+		}
+		
+		/* Fallback to Rockchip-specific ioctl for regular sensors */
 		for (i = 0; i < dev->csi_dev.max_pad - 1; i++) {
 			struct rkmodule_channel_info ch = { 0 };
 
@@ -414,7 +448,7 @@ int rkisp_update_sensor_info(struct rkisp_device *dev)
 			ret = mbus_pixelcode_to_mipi_dt(fmt->format.code);
 			if (ret < 0) {
 				v4l2_err(&dev->v4l2_dev,
-					 "Invalid mipi data type\n");
+					 "Invalid mipi data type 0x%x\n", fmt->format.code);
 				return ret;
 			}
 
@@ -427,6 +461,8 @@ int rkisp_update_sensor_info(struct rkisp_device *dev)
 				  fmt->format.width,
 				  fmt->format.height);
 		}
+skip_channel_info:
+		; /* Empty statement after label */
 	}
 
 	v4l2_subdev_call(sensor->sd, video, g_frame_interval, &sensor->fi);

@@ -708,11 +708,17 @@ static int csi2_dphy_g_mbus_config(struct v4l2_subdev *sd,
 	struct csi2_sensor *sensor;
 	int ret = 0;
 
-	if (!sensor_sd)
+	if (!sensor_sd) 
 		return -ENODEV;
+	
 	sensor = sd_to_sensor(dphy, sensor_sd);
-	if (!sensor)
-		return -ENODEV;
+	if (!sensor) {
+		ret = v4l2_subdev_call(sensor_sd, pad, get_mbus_config, 0, config);
+		if (ret) 
+			return ret;
+		return 0;
+	}
+	
 	ret = csi2_dphy_update_sensor_mbus(sd);
 	*config = sensor->mbus;
 
@@ -766,7 +772,39 @@ static int csi2_dphy_get_set_fmt(struct v4l2_subdev *sd,
 	sensor = sd_to_sensor(dphy, sensor_sd);
 	if (!sensor)
 		return -ENODEV;
-	ret = v4l2_subdev_call(sensor_sd, pad, get_fmt, NULL, fmt);
+	
+	/* For subdevs with multiplexed streams , use their active state */
+	if (fmt->which == V4L2_SUBDEV_FORMAT_ACTIVE && 
+	    (sensor_sd->flags & V4L2_SUBDEV_FL_STREAMS)) {
+		struct v4l2_subdev_state *state;
+		struct v4l2_subdev_format remote_fmt = *fmt;
+		unsigned int i;
+		
+		remote_fmt.pad = 0;
+		for (i = 0; i < sensor_sd->entity.num_pads; i++) {
+			if (sensor_sd->entity.pads[i].flags & MEDIA_PAD_FL_SOURCE) {
+				remote_fmt.pad = i;
+				break;
+			}
+		}
+		
+		state = v4l2_subdev_lock_and_get_active_state(sensor_sd);
+		if (state) {
+			ret = v4l2_subdev_call(sensor_sd, pad, get_fmt, state, &remote_fmt);
+			if (ret) {
+				dev_dbg(dphy->dev, "Failed to get format from %s pad %d stream %d: %d\n",
+					sensor_sd->name, remote_fmt.pad, remote_fmt.stream, ret);
+			} else {
+				*fmt = remote_fmt;
+			}
+			v4l2_subdev_unlock_state(state);
+		} else {
+			ret = -EINVAL;
+		}
+	} else {
+		ret = v4l2_subdev_call(sensor_sd, pad, get_fmt, NULL, fmt);
+	}
+	
 	if (!ret && fmt->pad == 0 && fmt->which == V4L2_SUBDEV_FORMAT_ACTIVE)
 		sensor->format = fmt->format;
 	return ret;

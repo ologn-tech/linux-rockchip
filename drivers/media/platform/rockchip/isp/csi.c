@@ -33,17 +33,39 @@ void rkisp_get_remote_mipi_sensor(struct rkisp_device *dev,
 	}
 
 	media_graph_walk_start(&graph, entity);
+	
 	while ((entity = media_graph_walk_next(&graph))) {
-		if (entity->function == function)
-			break;
+		struct v4l2_subdev *sd_tmp;
+		
+
+		if (entity->function == MEDIA_ENT_F_VID_IF_BRIDGE) {
+			sd_tmp = media_entity_to_v4l2_subdev(entity);
+			if (sd_tmp && (sd_tmp->flags & V4L2_SUBDEV_FL_STREAMS)) {
+				unsigned int i, num_sink_pads = 0;
+				
+				for (i = 0; i < entity->num_pads; i++) {
+					if (entity->pads[i].flags & MEDIA_PAD_FL_SINK)
+						num_sink_pads++;
+				}
+				
+				if (num_sink_pads > 1) {
+					*sensor_sd = sd_tmp;
+					break;
+				}
+			}
+		}
+		
+		if (entity->function == function && !*sensor_sd) {
+			/* Found first matching sensor */
+			*sensor_sd = media_entity_to_v4l2_subdev(entity);
+		}
 	}
+	
 	mutex_unlock(&mdev->graph_mutex);
 	media_graph_walk_cleanup(&graph);
 
-	if (entity)
-		*sensor_sd = media_entity_to_v4l2_subdev(entity);
-	else
-		*sensor_sd = NULL;
+	if (!*sensor_sd)
+		pr_err("rkisp_get_remote_mipi_sensor: NO sensor found!\n");
 }
 
 static struct v4l2_subdev *get_remote_subdev(struct v4l2_subdev *sd)
