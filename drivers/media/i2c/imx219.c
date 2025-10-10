@@ -21,6 +21,7 @@
 #include <linux/version.h>
 #include <linux/rk-camera-module.h>
 #include <linux/pinctrl/consumer.h>
+#include <media/mipi-csi2.h>
 #include <media/v4l2-ctrls.h>
 #include <media/v4l2-device.h>
 #include <media/v4l2-fwnode.h>
@@ -831,6 +832,35 @@ static int imx219_enum_frame_interval(struct v4l2_subdev *sd,
 	return 0;
 }
 
+static int imx219_get_frame_desc(struct v4l2_subdev *sd, unsigned int pad,
+				 struct v4l2_mbus_frame_desc *fd)
+{
+	struct i2c_client *client = v4l2_get_subdevdata(sd);
+	struct imx219 *priv = to_imx219(client);
+	const struct imx219_mode *mode = priv->cur_mode;
+
+	if (pad != 0)
+		return -EINVAL;
+
+	memset(fd, 0, sizeof(*fd));
+
+	fd->type = V4L2_MBUS_FRAME_DESC_TYPE_CSI2;
+	fd->num_entries = 1;
+
+	/* IMX219 outputs RAW10 format on stream 0, VC 0 */
+	fd->entry[0].stream = 0;
+	fd->entry[0].flags = V4L2_MBUS_FRAME_DESC_FL_LEN_MAX;
+	fd->entry[0].length = mode->width * mode->height * 10 / 8; /* RAW10: 10 bits per pixel */
+	fd->entry[0].pixelcode = MEDIA_BUS_FMT_SRGGB10_1X10;
+	fd->entry[0].bus.csi2.vc = 0;
+	fd->entry[0].bus.csi2.dt = MIPI_CSI2_DT_RAW10;
+
+	dev_dbg(&client->dev, "IMX219: get_frame_desc: stream=0 vc=0 dt=0x%x size=%dx%d\n",
+		fd->entry[0].bus.csi2.dt, mode->width, mode->height);
+
+	return 0;
+}
+
 static int imx219_g_mbus_config(struct v4l2_subdev *sd, unsigned int pad,
 				struct v4l2_mbus_config *config)
 {
@@ -863,6 +893,7 @@ static const struct v4l2_subdev_pad_ops imx219_subdev_pad_ops = {
 	.enum_frame_interval = imx219_enum_frame_interval,
 	.set_fmt = imx219_set_fmt,
 	.get_fmt = imx219_get_fmt,
+	.get_frame_desc = imx219_get_frame_desc,
 	.get_mbus_config = imx219_g_mbus_config,
 };
 
